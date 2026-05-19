@@ -115,13 +115,34 @@ namespace OpenKNX
 
         void PingHandler::loop()
         {
+            if (_activePingCount == 0 && _pendingQueue.empty() && _resolvedDns.empty())
+                return;
+
+            checkReplies();
+
             if (!delayCheckMillis(_lastLoopTime, 50))
                 return;
             _lastLoopTime = millis();
 
             processDnsResults();
-            processPendingSlots();
+            processTimeouts();
             startNextPending();
+        }
+
+        void PingHandler::checkReplies()
+        {
+            uint32_t replyTimeMs = 0;
+            for (int i = 0; i < OPENKNX_PING_PARALLEL; i++)
+            {
+                if (_activeSlots[i].state == PingRequest::PINGING)
+                {
+                    if (platformCheckReply(i, replyTimeMs))
+                    {
+                        uint32_t rttMs = replyTimeMs - _activeSlots[i].startTimeMs;
+                        dispatchCallback(i, true, rttMs);
+                    }
+                }
+            }
         }
 
         void PingHandler::processDnsResults()
@@ -140,36 +161,17 @@ namespace OpenKNX
             }
         }
 
-        int PingHandler::findFreeSlot()
+        void PingHandler::processTimeouts()
         {
-            for (int i = 0; i < OPENKNX_PING_PARALLEL; i++)
-            {
-                if (_activeSlots[i].state == PingRequest::IDLE)
-                    return i;
-            }
-            return -1;
-        }
-
-        void PingHandler::processPendingSlots()
-        {
-            uint32_t replyTimeMs = 0;
             for (int i = 0; i < OPENKNX_PING_PARALLEL; i++)
             {
                 if (_activeSlots[i].state == PingRequest::PINGING)
                 {
-                    if (platformCheckReply(i, replyTimeMs))
+                    uint32_t elapsed = millis() - _activeSlots[i].startTimeMs;
+                    if (elapsed >= _activeSlots[i].timeoutMs)
                     {
-                        uint32_t rttMs = replyTimeMs - _activeSlots[i].startTimeMs;
-                        dispatchCallback(i, true, rttMs);
-                    }
-                    else
-                    {
-                        uint32_t elapsed = millis() - _activeSlots[i].startTimeMs;
-                        if (elapsed >= _activeSlots[i].timeoutMs)
-                        {
-                            platformClosePing(i);
-                            dispatchCallback(i, false, 0);
-                        }
+                        platformClosePing(i);
+                        dispatchCallback(i, false, 0);
                     }
                 }
                 else if (_activeSlots[i].state == PingRequest::SUCCESS ||
@@ -179,6 +181,22 @@ namespace OpenKNX
                     _activePingCount--;
                 }
             }
+        }
+
+        // kept for backward compatibility — delegates to processTimeouts
+        void PingHandler::processPendingSlots()
+        {
+            processTimeouts();
+        }
+
+        int PingHandler::findFreeSlot()
+        {
+            for (int i = 0; i < OPENKNX_PING_PARALLEL; i++)
+            {
+                if (_activeSlots[i].state == PingRequest::IDLE)
+                    return i;
+            }
+            return -1;
         }
 
         void PingHandler::startNextPending()

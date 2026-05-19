@@ -7,8 +7,8 @@
 #include <string>
 
 #ifdef ARDUINO_ARCH_ESP32
-    #include <freertos/FreeRTOS.h>
-    #include <freertos/task.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 
 #ifndef OPENKNX_PING_TIMEOUT
@@ -85,8 +85,10 @@ namespace OpenKNX
 #endif
 
             void startNextPending();
-            void processPendingSlots();
+            void checkReplies();
             void processDnsResults();
+            void processTimeouts();
+            void processPendingSlots();
             int findFreeSlot();
             void dispatchCallback(int slotIndex, bool reachable, uint32_t rttMs);
 
