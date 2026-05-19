@@ -17,9 +17,11 @@ This module provides the network functionality for the OpenKNX stack.
 | RP2040 | LAN  | Integrated | KNX_IP_LAN  |                                                               |
 
 
-| Define         | Default  | Description           | Note                                    |
-|----------------|----------|-----------------------|-----------------------------------------|
-| OPENKNX_LED_IP |          | used LED for IP state | set to info2Led to use IP LED feature   |  
+| Define                   | Default | Description                          | Note                                         |
+|--------------------------|---------|--------------------------------------|----------------------------------------------|
+| OPENKNX_LED_IP           |         | LED used for IP state                | Set to info2Led to use IP LED feature        |
+| OPENKNX_PING_TIMEOUT     | 1000    | Default ping timeout in milliseconds | Can be overridden per call                   |
+| OPENKNX_PING_PARALLEL    | 5       | Max concurrent pings                 | Additional requests are queued automatically |
 
 ## IP LED
 
@@ -32,6 +34,35 @@ Possible values for OPENKNX_LED_IP: info1Led, info2Led, info3Led. Recommended va
 | No connection to the network  | Off           | Red                |                                        |
 | No IP adress                  | Slow flashing | Yellow             |                                        |
 | IP adress assigned            | On            | Green              |                                        |
+
+## Ping
+
+The module provides a non-blocking ping API with an internal queue and parallel slot management.
+
+### API
+
+```cpp
+// Ping by IP address
+openknxNetwork.ping(IPAddress(192, 168, 1, 1), [](IPAddress ip, bool reachable, uint32_t rttMs) {
+    if (reachable) logInfo("Ping", "%s: %lu ms", ip.toString().c_str(), rttMs);
+});
+
+// Ping by hostname (DNS resolved automatically)
+openknxNetwork.ping("router.local", [](IPAddress ip, bool reachable, uint32_t rttMs) {
+    if (reachable) logInfo("Ping", "%s: %lu ms", ip.toString().c_str(), rttMs);
+});
+
+// With explicit timeout (ms)
+openknxNetwork.ping(target, callback, 500);
+```
+
+### Console command
+
+```
+ping <ip|hostname>
+```
+
+Example: `ping 8.8.8.8` or `ping openknx.de`
 
 ## OTA
 

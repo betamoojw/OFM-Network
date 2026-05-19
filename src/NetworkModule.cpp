@@ -339,10 +339,10 @@ void NetworkModule::setup(bool configured)
     }
 
 #ifdef ParamNET_NTP
-        if (ParamNET_NTP)
-        {
-            openknx.time.setTimeProvider(new NtpTimeProvider());
-        }
+    if (ParamNET_NTP)
+    {
+        openknx.time.setTimeProvider(new NtpTimeProvider());
+    }
 #endif
 
 #ifdef ARDUINO_ARCH_ESP32
@@ -529,6 +529,8 @@ void NetworkModule::loop(bool configured)
     }
 
     if (_powerSave) return;
+
+    _pingHandler.loop();
 
     checkLinkStatus();
     handleOTA();
@@ -728,6 +730,17 @@ bool NetworkModule::processCommand(const std::string cmd, bool debugKo)
 // }
 #endif
 
+    else if (cmd.compare(0, 5, "ping ") == 0)
+    {
+        ping(cmd.substr(5), [](IPAddress ip, bool reachable, uint32_t rttMs) {
+            if (reachable)
+                openknx.logger.logWithPrefixAndValues("Network", "Reply from %s in %lu ms", ip.toString().c_str(), rttMs);
+            else
+                openknx.logger.logWithPrefixAndValues("Network", "No reply from %s", ip.toString().c_str());
+        });
+        return true;
+    }
+
     return false;
 }
 
@@ -797,6 +810,7 @@ void NetworkModule::showHelp()
     // openknx.console.printHelpLine("net mc [address|reset]", "Get/Set multicast address");
 #endif
     openknx.console.printHelpLine("net reset", "Reset network adapter");
+    openknx.console.printHelpLine("ping x.x.x.x", "Ping an IP address");
 }
 
 // Link status
@@ -1017,6 +1031,16 @@ void NetworkModule::controlKnxIp(bool enable)
 #elif MASK_VERSION == 0x57B0
     knx.bau().getDataLinkLayer()->enabled(enable);
 #endif
+}
+
+void NetworkModule::ping(IPAddress target, std::function<void(IPAddress, bool, uint32_t)> callback, uint32_t timeoutMs)
+{
+    _pingHandler.ping(target, callback, timeoutMs);
+}
+
+void NetworkModule::ping(const std::string &host, std::function<void(IPAddress, bool, uint32_t)> callback, uint32_t timeoutMs)
+{
+    _pingHandler.ping(host, callback, timeoutMs);
 }
 
 NetworkModule openknxNetwork;

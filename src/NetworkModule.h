@@ -1,9 +1,10 @@
 #if defined(KNX_IP_WIFI) || defined(KNX_IP_LAN)
 #pragma once
 #include "OpenKNX.h"
+#include "OpenKNX/Led/FunctionManager.h"
+#include "OpenKNX/Network/PingHandler.h"
 #include "strings.h"
 #include <functional>
-#include "OpenKNX//Led/FunctionManager.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <ESPmDNS.h>
@@ -39,7 +40,8 @@
 #include "UsbExchangeModule.h"
 #endif
 
-namespace OpenKNX::Led {
+namespace OpenKNX::Led
+{
     extern uint32_t g_ipLedActivity;
 }
 
@@ -87,6 +89,10 @@ class NetworkModule : public OpenKNX::Module
     void setMulticastAddress(IPAddress address, bool rebootToTakeEffect);
 #endif
 
+    void ping(IPAddress target, std::function<void(IPAddress, bool, uint32_t)> callback = nullptr,
+              uint32_t timeoutMs = OPENKNX_PING_TIMEOUT);
+    void ping(const std::string &host, std::function<void(IPAddress, bool, uint32_t)> callback = nullptr,
+              uint32_t timeoutMs = OPENKNX_PING_TIMEOUT);
 
 #ifdef ARDUINO_ARCH_ESP32
     void esp32NetworkEvent(arduino_event_id_t event);
@@ -105,7 +111,7 @@ class NetworkModule : public OpenKNX::Module
     bool _otaAllowed = false;
     bool _otaHandle = false;
     uint8_t _ipLedState = 0;
-    OpenKNX::Led::FunctionGroup* _ipLedFunc = nullptr;
+    OpenKNX::Led::FunctionGroup *_ipLedFunc = nullptr;
 
 #ifdef ARDUINO_ARCH_ESP32
     const uint16_t _otaPort = 3232;
@@ -143,6 +149,7 @@ class NetworkModule : public OpenKNX::Module
     void handleOTA();
     void controlKnxIp(bool state);
 
+    OpenKNX::Network::PingHandler _pingHandler;
 
 #ifdef KNX_IP_WIFI
     char _wifiSSID[33] = {};
