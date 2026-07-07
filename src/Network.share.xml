@@ -308,13 +308,13 @@ Geräte, die ausschließlich per TP angebunden sind, benötigen hier keine Konfi
               </ParameterBlock>
 
               <!-- HTTP -->
-              <choose ParamRefId="%AID%_UP-%TT%00032_R-%TT%0003201">
+              <!-- <choose ParamRefId="%AID%_UP-%TT%00032_R-%TT%0003201">
                 <when test="1">
                   <ParameterBlock Id="%AID%_PB-nnn" Name="HTTP" Text="Webserver" Icon="web" HelpContext="NET-Webserver">
                     <ParameterSeparator Id="%AID%_PS-nnn" Text="Webserver" UIHint="Headline" />
                   </ParameterBlock>
                 </when>
-              </choose>
+              </choose> -->
 
               <!-- MQTT -->
               <choose ParamRefId="%AID%_UP-%TT%00035_R-%TT%0003501">
