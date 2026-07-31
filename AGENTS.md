@@ -13,6 +13,14 @@
 
 Full documentation: [`doc/Applikationsbeschreibung-Netzwerk.md`](doc/Applikationsbeschreibung-Netzwerk.md)
 
+> **Not self-contained:** OFM-Network cannot be compiled or run on its
+> own. The majority of the base infrastructure (module system, KNX
+> stack integration, logging, flash storage, time API) lives in
+> **OGM-Common**, at `../OGM-Common/AGENTS.md` (one directory up) —
+> conventions and Claude skills documented there apply here too. When
+> tracing types like `OpenKNX::Module`, `OpenKNX::Log::Logger`, or
+> `OpenKNX::Time::TimeProvider`, look there first.
+
 ---
 
 ## Hardware Platforms
