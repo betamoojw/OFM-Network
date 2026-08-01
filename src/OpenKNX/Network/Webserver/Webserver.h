@@ -4,6 +4,7 @@
 
 #include "OpenKNX/Network/Webserver/WebRequest.h"
 #include "OpenKNX/Network/Webserver/WebResponse.h"
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -78,6 +79,9 @@ namespace OpenKNX
             bool isRunning();
             void sendWebsocketMessage(const std::string& uri, const char* message, int fd = -1);
             bool sendToClient(const std::string& uri, int fd, const char* data, size_t len);
+            // Largest payload one WS frame can carry. Callers that retry on a failed
+            // sendToClient() must stay within it, otherwise they retry forever.
+            size_t maxWebsocketPayload() const;
             std::vector<int> connectedClientFds(const std::string& uri) const;
 
             // Public so other modules can embed pages in the same shell

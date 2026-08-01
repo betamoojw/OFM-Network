@@ -6,6 +6,7 @@
 #include "OpenKNX/Network/Webserver/Webserver.h"
 #include <algorithm>
 #include <arpa/inet.h>
+#include <cstdint>
 #include <esp_http_server.h>
 #include <fcntl.h>
 #include <freertos/FreeRTOS.h>
@@ -581,6 +582,11 @@ namespace OpenKNX
         bool Webserver::isRunning()
         {
             return _server != nullptr;
+        }
+
+        size_t Webserver::maxWebsocketPayload() const
+        {
+            return SIZE_MAX; // wsSendText() allokiert pro Frame auf dem Heap
         }
 
         bool Webserver::sendToClient(const std::string& uri, int fd, const char* data, size_t len)

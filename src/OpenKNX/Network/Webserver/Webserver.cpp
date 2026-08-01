@@ -5,6 +5,7 @@
 #include "OpenKNX.h"
 #include "OpenKNX/Network/Module.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -361,12 +362,15 @@ namespace OpenKNX
             });
 
             addRoute(WEB_GET, "/prog", [](WebRequest& req, WebResponse& res) {
-                // Parse mode parameter from query string
-                size_t pos = req.uri.find("mode=");
-                if (pos != std::string::npos)
+                // Kein std::stoi — wirft bei nicht-numerischem Input und beendet
+                // unter -fno-exceptions das Programm.
+                std::string mode = req.getQueryParam("mode");
+                if (!mode.empty())
                 {
-                    int mode = std::stoi(req.uri.substr(pos + 5));
-                    knx.progMode(mode != 0);
+                    char* end = nullptr;
+                    long value = strtol(mode.c_str(), &end, 10);
+                    if (end != mode.c_str() && *end == '\0')
+                        knx.progMode(value != 0);
                 }
                 // Redirect to home
                 res.setStatus(303);

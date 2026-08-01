@@ -47,17 +47,44 @@ namespace OpenKNX
                                                       "const inp=document.getElementById('console-inp');"
                                                       "const btn=document.getElementById('console-send');"
                                                       "const MAX_LINES=500;"
-                                                      "function appendOut(html){"
-                                                      "out.insertAdjacentHTML('beforeend',html);"
+                                                      // Log-Zeilen kommen roh inkl. ANSI-Sequenzen an. Ausgabe nur
+                                                      // über textContent, nie als HTML.
+                                                      "const ANSI={31:'red',32:'green',33:'yellow',90:'gray'};"
+                                                      "function trim(){"
                                                       "while(out.childNodes.length>MAX_LINES)out.removeChild(out.firstChild);"
                                                       "out.scrollTop=out.scrollHeight;"
+                                                      "}"
+                                                      "function emit(frag,text,cls){"
+                                                      "if(!text)return;"
+                                                      "if(cls){const s=document.createElement('span');s.className=cls;"
+                                                      "s.textContent=text;frag.appendChild(s);}"
+                                                      "else frag.appendChild(document.createTextNode(text));"
+                                                      "}"
+                                                      "function appendOut(text){"
+                                                      "const frag=document.createDocumentFragment();"
+                                                      "const re=/\\x1b\\[([0-9;]*)m/g;"
+                                                      "let cls=null,last=0,m;"
+                                                      "while((m=re.exec(text))!==null){"
+                                                      "emit(frag,text.slice(last,m.index),cls);"
+                                                      // "1;32": letzter bekannter Code gewinnt, "0" setzt zurück
+                                                      "cls=null;"
+                                                      "for(const c of m[1].split(';')){const n=ANSI[parseInt(c,10)];if(n)cls=n;}"
+                                                      "last=re.lastIndex;"
+                                                      "}"
+                                                      "emit(frag,text.slice(last),cls);"
+                                                      "out.appendChild(frag);trim();"
+                                                      "}"
+                                                      "function appendStatus(text,cls){"
+                                                      "const s=document.createElement('span');"
+                                                      "s.className=cls;s.textContent=text+'\\n';"
+                                                      "out.appendChild(s);trim();"
                                                       "}"
                                                       "let ws;"
                                                       "function connect(){"
                                                       "ws=new WebSocket('ws://'+location.host+'/console');"
-                                                      "ws.onopen=()=>{appendOut('<span class=\"green\">[verbunden]\\n</span>');};"
+                                                      "ws.onopen=()=>{appendStatus('[verbunden]','green');};"
                                                       "ws.onmessage=e=>{appendOut(e.data);};"
-                                                      "ws.onclose=()=>{appendOut('<span class=\"red\">[Verbindung getrennt &mdash; Seite neu laden]\\n</span>');};"
+                                                      "ws.onclose=()=>{appendStatus('[Verbindung getrennt \\u2014 Seite neu laden]','red');};"
                                                       "}"
                                                       "connect();"
                                                       "function send(){"
@@ -96,7 +123,12 @@ namespace OpenKNX
                         memcpy(_pendingCmd, f->data, len);
                         _pendingCmd[len] = '\0';
                         _hasPendingCmd = true;
-                    } }, nullptr);
+                    } },
+                [this](int clientId, bool connected) {
+                    // Sonst erbt ein neuer Client mit gleichem fd/Slot die alte
+                    // Leseposition und bekommt einen Backlog-Dump.
+                    if (!connected) _consoleReadPos.erase(clientId);
+                });
         }
 
         void Webconsole::loop()
@@ -119,6 +151,12 @@ namespace OpenKNX
             if (clients.empty()) return;
 
             uint32_t writePos = openknx.logger.ringWritePos();
+
+            // Eine Payload, die nicht in einen WS-Frame passt, wäre dauerhaft unsendbar
+            // und würde die Retry-Schleife unten endlos blockieren.
+            uint32_t maxLine = 512;
+            const size_t maxPayload = openknxNetwork.webserver.maxWebsocketPayload();
+            if (maxPayload < maxLine) maxLine = (uint32_t)maxPayload;
 
             // Remove stale entries for disconnected clients
             for (auto it = _consoleReadPos.begin(); it != _consoleReadPos.end();)
@@ -143,12 +181,11 @@ namespace OpenKNX
 
                 while (readPos < writePos)
                 {
-                    // Send only complete lines to avoid splitting ANSI sequences
-                    // across ansiToHtml() calls. Fall back to a fixed chunk if no
-                    // newline within MAX_LINE bytes (e.g. very long hex-dump lines).
-                    static constexpr uint32_t MAX_LINE = 512;
+                    // Send only complete lines so the client-side ANSI parser never has
+                    // to carry state across messages. Fall back to a fixed chunk if no
+                    // newline within maxLine bytes (e.g. very long hex-dump lines).
                     uint32_t pos = readPos;
-                    uint32_t limit = (writePos - readPos < MAX_LINE) ? writePos : readPos + MAX_LINE;
+                    uint32_t limit = (writePos - readPos < maxLine) ? writePos : readPos + maxLine;
                     bool foundNewline = false;
                     while (pos < limit)
                     {
@@ -160,79 +197,17 @@ namespace OpenKNX
                         }
                         pos++;
                     }
-                    if (!foundNewline && writePos - readPos < MAX_LINE) break;
+                    if (!foundNewline && writePos - readPos < maxLine) break;
 
                     std::string line;
                     line.reserve(pos - readPos);
                     for (uint32_t i = readPos; i < pos; i++)
                         line += openknx.logger.ringBuf()[i % Log::Logger::RING_SIZE];
 
-                    std::string html = ansiToHtml(line);
-                    if (!openknxNetwork.webserver.sendToClient("/console", fd, html.c_str(), html.size())) break;
+                    if (!openknxNetwork.webserver.sendToClient("/console", fd, line.c_str(), line.size())) break;
                     readPos = pos;
                 }
             }
-        }
-
-        std::string Webconsole::ansiToHtml(const std::string& s)
-        {
-            static const struct
-            {
-                int code;
-                const char* cls;
-            } colorMap[] = {
-                {31, "red"}, {32, "green"}, {33, "yellow"}, {90, "gray"}};
-
-            std::string out;
-            bool spanOpen = false;
-            size_t i = 0;
-            while (i < s.size())
-            {
-                if (s[i] == '\x1B' && i + 1 < s.size() && s[i + 1] == '[')
-                {
-                    size_t j = i + 2;
-                    while (j < s.size() && s[j] != 'm')
-                        j++;
-                    if (j < s.size())
-                    {
-                        int code = 0;
-                        for (size_t k = i + 2; k < j; k++)
-                            code = code * 10 + (s[k] - '0');
-                        if (spanOpen)
-                        {
-                            out += "</span>";
-                            spanOpen = false;
-                        }
-                        if (code != 0)
-                        {
-                            for (auto& e : colorMap)
-                            {
-                                if (e.code == code)
-                                {
-                                    out += "<span class='";
-                                    out += e.cls;
-                                    out += "'>";
-                                    spanOpen = true;
-                                    break;
-                                }
-                            }
-                        }
-                        i = j + 1;
-                        continue;
-                    }
-                }
-                char c = s[i];
-                if (c == '<') out += "&lt;";
-                else if (c == '>')
-                    out += "&gt;";
-                else if (c == '&')
-                    out += "&amp;";
-                else
-                    out += c;
-                i++;
-            }
-            if (spanOpen) out += "</span>";
-            return out;
         }
 
     } // namespace Network

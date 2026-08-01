@@ -303,7 +303,8 @@ Per-client tracking: `ConnSlot.wsSentSeq` holds the last successfully sent seque
 
 - **No automatic reconnect** — on connection loss `[Connection lost — reload page]` is shown and the page must be reloaded manually
 - **Reason:** Automatic reconnect caused race conditions in log output and made it harder to debug disconnect causes
-- ANSI colors are converted to CSS classes by `ansiToHtml()` (`red`, `green`, `yellow`, `gray`)
+- **The firmware sends raw log lines**, ANSI escapes included — no markup is generated on the device. The browser maps the codes to the CSS classes `red`/`green`/`yellow`/`gray` and inserts every segment via `textContent`, so log text is never parsed as HTML and the WS payload equals the raw line length
+- Chunks are bounded by `Webserver::maxWebsocketPayload()` (RP2040: 1496 B fixed frame buffer, ESP32: unbounded) — a larger payload could never be sent and the drain loop's retry would block the console forever
 - Commands are sent as text frames (WS opcode 0x01), responses come back as ring buffer drain
 
 ### Group Monitor (`OPENKNX_WEBMONITOR`, TP only)

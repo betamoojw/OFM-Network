@@ -117,6 +117,9 @@ namespace OpenKNX
         static constexpr int MAX_CONN = OPENKNX_WEBSERVER_MAX_CONN; // shared HTTP + WS slot pool
         static ConnSlot g_slots[MAX_CONN];
 
+        static constexpr size_t WS_FRAME_BUF = 1500;
+        static constexpr size_t WS_MAX_PAYLOAD = WS_FRAME_BUF - 4; // 4 B header, 126..65535 form
+
         // ── Slot management ───────────────────────────────────────────────────
 
         static ConnSlot* findSlot(tcp_pcb* pcb)
@@ -199,6 +202,8 @@ namespace OpenKNX
         }
 
         // Sends a WS text frame over the lwIP TCP connection.
+        // Returns false both for "retry later" (send buffer full) and for payloads above
+        // WS_MAX_PAYLOAD — retrying callers must respect maxWebsocketPayload().
         // Checks tcp_sndbuf() first — if the send buffer is full (slow/stalled client),
         // drop the frame rather than stalling the watchdog-monitored loop.
         // Header + payload are combined into a single tcp_write to guarantee atomicity:
@@ -206,8 +211,8 @@ namespace OpenKNX
         // while the header is already queued, permanently corrupting the WebSocket stream.
         static bool wsTcpSend(tcp_pcb* pcb, const char* data, size_t len)
         {
-            // Stack buffer avoids heap fragmentation; 1500 covers max HTML-expanded log line
-            uint8_t frame[1500];
+            // Stack buffer avoids heap fragmentation
+            uint8_t frame[WS_FRAME_BUF];
 
             int hLen = 0;
             frame[hLen++] = 0x81; // FIN + text opcode
@@ -779,6 +784,10 @@ namespace OpenKNX
             ConnSlot* s = (ConnSlot*)arg;
             if (!s || s->pcb != tpcb) return ERR_OK; // stale callback from a reused slot
 
+            // Sendefortschritt = Lebenszeichen, sonst killt der Stall-Detector in
+            // onPoll() jeden Transfer über ~22 s (grosse Downloads).
+            s->pollCount = 0;
+
             if (s->state == CS_HTTP_SEND)
             {
                 if (s->streaming)
@@ -1046,6 +1055,11 @@ namespace OpenKNX
         bool Webserver::isRunning()
         {
             return _listenPcb != nullptr;
+        }
+
+        size_t Webserver::maxWebsocketPayload() const
+        {
+            return WS_MAX_PAYLOAD;
         }
 
         bool Webserver::sendToClient(const std::string&, int fd, const char* data, size_t len)

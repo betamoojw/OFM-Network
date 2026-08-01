@@ -235,7 +235,7 @@ namespace OpenKNX
         // lesbaren Wert (Stack-Buffer, keine Heap-Strings). out bleibt leer bei
         // unbekanntem/nicht unterstütztem DPT → Browser zeigt dann die Rohbytes.
         static void decodeValue(uint8_t dpt, uint8_t sub, const char* d, uint16_t meta,
-                                uint8_t len, char* out, size_t outLen)
+                                uint8_t len, uint16_t total, char* out, size_t outLen)
         {
             out[0] = '\0';
 
@@ -244,13 +244,20 @@ namespace OpenKNX
             if (len <= 1)
             {
                 // ≤6-bit-Wert steckt im APCI-Low-Oktett (DPT 1/2/3)
+                if (meta < 1 || meta > total) return;
                 buf[0] = (uint8_t)d[meta - 1] & 0x3F;
                 vlen = 1;
             }
             else
             {
+                // apduSize() kommt aus dem Längenfeld und kann bei verstümmelten Frames
+                // grösser sein als der Puffer.
                 vlen = (size_t)(len - 1);
                 if (vlen > sizeof(buf)) vlen = sizeof(buf);
+                if (meta >= total) return;
+                const size_t avail = (size_t)(total - meta);
+                if (vlen > avail) vlen = avail;
+                if (vlen == 0) return;
                 for (size_t i = 0; i < vlen; i++)
                     buf[i] = (uint8_t)d[meta + i];
             }
@@ -320,7 +327,7 @@ namespace OpenKNX
                 if (openknxNetwork.gatable.getDpt(addr, dptMain, dptSub) && dptSub > 0)
                 {
                     snprintf(dptStr, sizeof(dptStr), "%u.%03u", dptMain, dptSub);
-                    decodeValue(dptMain, dptSub, d, meta, len, val, sizeof(val));
+                    decodeValue(dptMain, dptSub, d, meta, len, total, val, sizeof(val));
                 }
             }
 
