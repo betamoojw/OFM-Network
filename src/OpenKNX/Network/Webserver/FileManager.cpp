@@ -3,6 +3,7 @@
 #include "OpenKNX/Network/Webserver/FileManager.h"
 #include "OpenKNX/Network/Module.h"
 #include "OpenKNX/Network/Webserver/Webserver.h"
+#include "webassets.h" // generiert von OGM-Common/scripts/pio/prepare.py aus web/assets/
 #include <LittleFS.h>
 #include <string>
 
@@ -11,76 +12,8 @@ namespace OpenKNX
     namespace Network
     {
 
-        static const char filemanagerCss[] =
-            ".right{text-align:right;white-space:nowrap}"
-            ".fm-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}"
-            ".fm-row button,.fm-row input[type=text]{height:34px;padding:0 14px;box-sizing:border-box;margin:0;border:1px solid #d0d0d0}"
-            ".fm-row input[type=text]{flex:1;min-width:180px}"
-            ".fm-storage{margin:0 0 6px}"
-            ".fm-file-hidden{display:none!important}"
-            ".fm-file-ctrl{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border:1px solid #d0d0d0;background:#fff;margin:0}"
-            ".fm-file-btn{flex:0 0 auto;display:inline-flex;align-items:center;padding:0 12px;height:24px;background:#333;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap;user-select:none}"
-            ".fm-file-btn:hover{background:#555}"
-            ".fm-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#888}"
-            ".fm-hidden{display:none}"
-            "#bar{flex:1;width:0;height:20px;border:none;border-radius:4px;appearance:none;-webkit-appearance:none;background:#e0e0e0}"
-            "#bar::-webkit-progress-bar{background:#e0e0e0;border-radius:4px}"
-            "#bar::-webkit-progress-value{background:#449841;border-radius:4px;transition:width .1s linear}"
-            "#bar::-moz-progress-bar{background:#449841;border-radius:4px}"
-            ".fm-upload-status{margin-top:4px;min-height:1.2em;font-size:.9em;color:#555}";
-
-        static const char filemanagerJs[] =
-            "async function uploadFile(){"
-            "const file=document.getElementById('fi').files[0];"
-            "if(!file)return;"
-            "const base=currentDir==='/'?'':currentDir;"
-            "const path=base+'/'+file.name;"
-            "const CHUNK=2048;"
-            "const bar=document.getElementById('bar');"
-            "const st=document.getElementById('st');"
-            "const picker=document.getElementById('fm-picker');"
-            "picker.classList.add('fm-hidden');bar.classList.remove('fm-hidden');bar.value=0;st.textContent='';"
-            "try{"
-            "for(let off=0;off<file.size||off===0;off+=CHUNK){"
-            "const end=Math.min(off+CHUNK,file.size);"
-            "const r=await fetch('/filemanager/upload?path='+encodeURIComponent(path)+'&offset='+off,"
-            "{method:'POST',body:file.slice(off,end),headers:{'Content-Type':'application/octet-stream'}});"
-            "if(!r.ok){const msg=await r.text();throw new Error(r.status===409?'Datei existiert bereits \xe2\x80\x93 zuerst l\xc3\xb6schen':r.status===413?'Dateisystem voll \xe2\x80\x93 Speicherplatz reicht nicht aus':msg);}"
-            "bar.value=Math.round(end/file.size*100);"
-            "if(end>=file.size)break;"
-            "}"
-            "st.textContent='\xe2\x9c\x93 Hochgeladen';"
-            "setTimeout(()=>location.reload(),800);"
-            "}catch(e){st.textContent='Fehler: '+e.message;bar.classList.add('fm-hidden');picker.classList.remove('fm-hidden');}"
-            "}"
-            "async function delFile(path){"
-            "if(!confirm('Datei l\xc3\xb6schen: '+path+'?'))return;"
-            "const r=await fetch('/filemanager/delete?path='+encodeURIComponent(path),{method:'POST'});"
-            "if(r.ok)location.reload();else alert(await r.text());"
-            "}"
-            "async function delDir(path){"
-            "if(!confirm('Ordner l\xc3\xb6schen: '+path+'?'))return;"
-            "const r=await fetch('/filemanager/delete?path='+encodeURIComponent(path),{method:'POST'});"
-            "if(r.ok)location.reload();else alert(await r.text());"
-            "}"
-            "async function mkDir(){"
-            "const name=document.getElementById('nd').value.trim();"
-            "if(!name)return;"
-            "const base=currentDir==='/'?'':currentDir;"
-            "const path=base+'/'+name;"
-            "const r=await fetch('/filemanager/mkdir?path='+encodeURIComponent(path),{method:'POST'});"
-            "if(r.ok)location.reload();else alert(await r.text());"
-            "}"
-            "{const _fi=document.getElementById('fi');"
-            "const _btn=document.getElementById('fi-btn');"
-            "const _nm=document.getElementById('fi-name');"
-            "if(_fi&&_btn&&_nm){"
-            "_btn.addEventListener('click',()=>_fi.click());"
-            "_btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')_fi.click();});"
-            "_fi.addEventListener('change',function(){"
-            "_nm.textContent=this.files[0]?this.files[0].name:'Keine Datei ausgew\xc3\xa4hlt.';"
-            "});}};";
-
+        // filemanager.css/filemanager.js liegen in web/assets/ und werden dort
+        // minifiziert + gzip-komprimiert in webassets.h eingebettet.
 
         // ── LittleFS Streaming-Kontext ────────────────────────────────────────
 
@@ -212,9 +145,9 @@ namespace OpenKNX
             openknxNetwork.webserver.addMenuItem("Dateimanager", "/filemanager", 50);
 
             openknxNetwork.webserver.addRoute(WEB_GET, "/assets/filemanager.css",
-                                              Webserver::Static("text/css", filemanagerCss));
+                                              Webserver::Asset(WebAssets::filemanager_css_mime, WebAssets::filemanager_css_gz, sizeof(WebAssets::filemanager_css_gz)));
             openknxNetwork.webserver.addRoute(WEB_GET, "/assets/filemanager.js",
-                                              Webserver::Static("application/javascript", filemanagerJs));
+                                              Webserver::Asset(WebAssets::filemanager_js_mime, WebAssets::filemanager_js_gz, sizeof(WebAssets::filemanager_js_gz)));
 
             openknxNetwork.webserver.addStylesheet("/assets/filemanager.css");
             openknxNetwork.webserver.addJavaScript("/assets/filemanager.js");

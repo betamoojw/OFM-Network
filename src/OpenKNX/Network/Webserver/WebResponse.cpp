@@ -86,6 +86,21 @@ namespace OpenKNX
             _bodyLength = length;
         }
 
+        void WebResponse::sendAsset(const char* mimeType, const uint8_t* data, size_t length)
+        {
+            setContentType(mimeType);
+            setHeader("Cache-Control", "public, max-age=86400");
+            setHeader("Content-Encoding", "gzip");
+            sendStatic(data, (int)length);
+        }
+
+        void WebResponse::sendRedirect(const std::string& target)
+        {
+            setStatus(301);
+            setHeader("Location", target.c_str());
+            send("");
+        }
+
         WebResponse::~WebResponse()
         {
             if (_bodyOwned) free(_body); // PSRAM_MALLOC

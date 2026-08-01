@@ -97,6 +97,9 @@ namespace OpenKNX
             static WebRouteHandler Redirect(const std::string& target);
             static WebRouteHandler Static(const char* mimeType, const char* text);
             static WebRouteHandler Static(const char* mimeType, const uint8_t* data, int length);
+            // Ein generiertes Web-Asset aus webassets.h (gzip-komprimiert) — siehe
+            // WebResponse::sendAsset() für die tatsächliche Header-/Body-Logik.
+            static WebRouteHandler Asset(const char* mimeType, const uint8_t* data, size_t length);
 
             // Logging
             void logRequest(const WebRequest& req, const WebResponse& res);

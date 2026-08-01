@@ -40,6 +40,15 @@ namespace OpenKNX
             void sendStatic(const char* text);
             void sendStatic(const uint8_t* data, int length);
 
+            // Gzip-komprimiertes, generiertes Web-Asset (siehe webassets.h): setzt
+            // Content-Type + Cache-Control + Content-Encoding: gzip und den Body als
+            // statischen Verweis (data liegt im Flash, keine Kopie). Keine Content-
+            // Negotiation — der Client bekommt immer die gzip-Fassung.
+            void sendAsset(const char* mimeType, const uint8_t* data, size_t length);
+
+            // 301-Redirect auf target, leerer Body.
+            void sendRedirect(const std::string& target);
+
             // Streaming-Response: Plattform ruft readFn wiederholt auf; cleanupFn nach EOF/Fehler
             void sendStream(size_t totalLength,
                             WebStreamReadFn readFn, WebStreamCleanupFn cleanupFn, void* ctx);

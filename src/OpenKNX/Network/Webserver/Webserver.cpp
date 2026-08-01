@@ -4,6 +4,7 @@
 
 #include "OpenKNX.h"
 #include "OpenKNX/Network/Module.h"
+#include "webassets.h" // generiert von OGM-Common/scripts/pio/prepare.py aus web/assets/
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -15,62 +16,8 @@ namespace OpenKNX
     {
 
         // ── Layout ─────────────────────────────────────────────────────────
-
-        static const char baseCss[] =
-            "*{box-sizing:border-box;margin:0;padding:0}"
-            "button,input,select,textarea{font-family:inherit;font-size:inherit;padding:6px;margin:revert;border:revert;border-radius:0;background:revert;color:revert}"
-            "body{display:flex;min-height:100vh;font-family:sans-serif;background:#fff;color:#111}"
-            "nav{width:220px;min-width:220px;background:#000;display:flex;flex-direction:column;"
-            "align-items:center;padding:6px 0;height:100vh;position:sticky;top:0;overflow-y:auto;"
-            "box-shadow:3px 0 4px rgba(0,0,0,.18);z-index:1}"
-            ".logo{width:180px;padding:0 24px;margin-top:12px;margin-bottom:12px}"
-            ".logo img{width:100%;height:auto}"
-            "nav a.menu{display:block;width:100%;padding:11px 24px;color:#aaa;text-decoration:none;"
-            "font-size:.9em;border-left:3px solid transparent;transition:all .15s}"
-            "nav a.menu:hover{background:#1a1a1a;color:#fff;border-left-color:#449841}"
-            "a.menu.active{color:#fff;border-left-color:#449841;background:#111}"
-            ".logo a{display:block;padding:0}"
-            ".nav-wiki{margin-top:auto;width:100%;padding:8px 0 8px;text-align:center}"
-            ".nav-wiki a,.nav-wiki a:hover{color:#555;font-size:.8em;padding:0;border:none;"
-            "background:none;display:inline;width:auto;text-decoration:none}"
-            ".nav-wiki a:hover{color:#888}"
-            ".menu-container{width:100%;margin:12px 0;display:flex;flex-direction:column}"
-            ".nav-footer{width:100%;padding:12px 24px 12px 27px;border-top:1px solid #222;"
-            "display:flex;flex-direction:column;gap:10px}"
-            ".nav-footer a{color:#666;text-decoration:none}"
-            ".prog-status{display:flex;align-items:center;color:#666;font-size:.8em;gap:8px}"
-            ".prog-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}"
-            ".dot-green{background:#449841}.dot-red{background:#ff5555}.dot-off{background:#555}"
-            ".nav-firm{font-weight:bold;font-size:.8em;color:#aaa}"
-            ".nav-info{display:flex;align-items:center;color:#666;font-size:.8em;gap:8px}"
-            "main{flex:1;padding:2em;min-width:0;display:flex;flex-direction:column}"
-            ".meta{color:#666;font-size:.8em;margin-bottom:1.5em}"
-            ".red{color:#ff5555}.green{color:#449841}.yellow{color:#ffff55}.gray{color:#888}"
-            "h1{font-size:1.25em;font-weight:600;margin-bottom:1.5em;color:#111}"
-            "h2{font-size:.95em;font-weight:600;margin:1.5em 0 .75em;color:#449841;"
-            "text-transform:uppercase;letter-spacing:.08em}"
-            "table{width:100%;border-collapse:collapse;margin-bottom:.5em;font-size:.88em}"
-            "td,th{text-align:left;padding:7px 14px}"
-            "th{background:#eee;color:#000;border-bottom:1px solid #bbb}"
-            "td{border-top:1px solid #eee}"
-            "tr:last-child td{border-bottom:1px solid #eee}"
-            ".attribute-table td:first-child{color:#888;white-space:nowrap;width:200px}"
-            "main a{color:#449841;text-decoration:none;transition:color .15s}"
-            "main a:hover{color:#5ab857;text-decoration:underline}"
-            ".container{max-width:960px}";
-
-        static const char baseJs[] = "/* OpenKNX */";
-
-        static const char faviconSvg[] =
-            "<svg width='32' height='32' viewBox='0 0 32 32' fill='none' xmlns='http://www.w3.org/2000/svg'>"
-            "<line x1='7' y1='20' x2='7' y2='15' stroke='#449841' stroke-width='2'/>"
-            "<line x1='25' y1='17' x2='25' y2='12' stroke='#449841' stroke-width='2'/>"
-            "<line y1='16' x2='32' y2='16' stroke='#449841' stroke-width='2'/>"
-            "<rect x='2' y='21' width='10' height='10' fill='#449841'/>"
-            "<rect x='20' y='1' width='10' height='10' fill='#449841'/>"
-            "<rect x='22' y='23' width='6' height='6' stroke='black' stroke-width='2'/>"
-            "<rect x='4' y='3' width='6' height='6' stroke='black' stroke-width='2'/>"
-            "</svg>";
+        // base.css/base.js/favicon.svg/logo.svg liegen in web/assets/ und werden
+        // dort minifiziert + gzip-komprimiert in webassets.h eingebettet.
 
         std::string Webserver::buildHeader(const std::string& activeUri)
         {
@@ -106,7 +53,7 @@ namespace OpenKNX
                     "<nav>"
                     "<div class='logo'>"
                     "<a href='https://www.openknx.de' target='_blank' rel='noopener noreferrer'>"
-                    "<img src='/assets/logo/black.svg" + buster + "' alt='OpenKNX'>"
+                    "<img src='/assets/logo.svg" + buster + "' alt='OpenKNX'>"
                     "</a>"
                     "</div>";
 
@@ -333,26 +280,10 @@ namespace OpenKNX
         {
             addMenuItem("Übersicht", "/", -127);
 
-            static const char logoSvg[] =
-                "<svg viewBox='0 0 402 242' fill='none' xmlns='http://www.w3.org/2000/svg'>"
-                "<path d='M1 50C1 34.7 5.1 22.7 13.3 14C21.6 5.3 32.2 1 45.2 1C53.7 1 61.4 3 68.3 7.1C75.1 11.2 80.3 16.9 83.9 24.2C87.5 31.4 89.3 39.7 89.3 48.9C89.3 58.3 87.4 66.7 83.6 74.1C79.9 81.5 74.5 87.1 67.6 90.9C60.6 94.7 53.2 96.6 45.2 96.6C36.5 96.6 28.7 94.5 21.8 90.3C15 86.1 9.8 80.3 6.3 73.1C2.8 65.8 1 58.1 1 50ZM13.6 50.2C13.6 61.3 16.6 70.1 22.5 76.5C28.5 82.9 36.1 86.1 45.1 86.1C54.3 86.1 61.8 82.9 67.8 76.4C73.7 69.9 76.7 60.8 76.7 48.9C76.7 41.4 75.4 34.8 72.9 29.2C70.4 23.6 66.6 19.2 61.7 16.2C56.8 13.1 51.4 11.5 45.3 11.5C36.6 11.5 29.2 14.5 22.9 20.5C16.7 26.4 13.6 36.3 13.6 50.2Z' fill='white'/>"
-                "<path d='M103.7 121V28.1H114V36.8C116.4 33.4 119.2 30.8 122.3 29.2C125.3 27.4 129 26.6 133.4 26.6C139.1 26.6 144.2 28 148.5 31C152.9 33.9 156.2 38.1 158.4 43.5C160.6 48.8 161.7 54.6 161.7 61C161.7 67.9 160.5 74 158 79.5C155.6 85 152 89.2 147.3 92.1C142.7 95 137.7 96.5 132.6 96.5C128.8 96.5 125.4 95.7 122.4 94.1C119.4 92.5 116.9 90.5 115 88V121H103.7ZM113.9 61.9C113.9 70.5 115.7 76.9 119.2 81C122.7 85.1 126.9 87.2 131.8 87.2C136.9 87.2 141.2 85 144.7 80.8C148.4 76.5 150.2 69.9 150.2 61C150.2 52.4 148.4 46.1 144.9 41.8C141.4 37.6 137.2 35.5 132.3 35.5C127.5 35.5 123.2 37.7 119.5 42.3C115.8 46.8 113.9 53.3 113.9 61.9Z' fill='white'/>"
-                "<path d='M221.3 73.4L233 74.9C231.1 81.7 227.7 87 222.7 90.8C217.7 94.6 211.3 96.5 203.6 96.5C193.8 96.5 186 93.5 180.3 87.5C174.6 81.4 171.7 73 171.7 62.1C171.7 50.8 174.6 42.1 180.4 35.9C186.2 29.7 193.7 26.6 202.9 26.6C211.9 26.6 219.2 29.6 224.9 35.7C230.5 41.8 233.4 50.4 233.4 61.4C233.4 62.1 233.3 63.1 233.3 64.4H183.4C183.8 71.8 185.9 77.4 189.7 81.3C193.4 85.2 198 87.2 203.6 87.2C207.8 87.2 211.3 86.1 214.3 83.9C217.2 81.7 219.5 78.2 221.3 73.4ZM184 55.1H221.4C220.9 49.5 219.5 45.3 217.1 42.4C213.5 38.1 208.8 35.9 203.1 35.9C197.9 35.9 193.5 37.6 189.9 41.1C186.4 44.6 184.4 49.3 184 55.1Z' fill='white'/>"
-                "<path d='M247.3 95V28.1H257.5V37.6C262.4 30.2 269.5 26.6 278.8 26.6C282.8 26.6 286.5 27.3 289.9 28.8C293.3 30.2 295.8 32.1 297.5 34.4C299.2 36.8 300.3 39.6 301 42.8C301.4 44.9 301.6 48.6 301.6 53.8V95H290.3V54.3C290.3 49.7 289.9 46.2 289 44C288.1 41.6 286.5 39.8 284.3 38.5C282 37.1 279.4 36.4 276.4 36.4C271.6 36.4 267.4 37.9 263.9 41C260.4 44.1 258.6 49.9 258.6 58.4V95H247.3Z' fill='white'/>"
-                "<path d='M103.7 242.5V138H124.8V184.4L167.4 138H195.8L156.4 178.7L197.9 242.5H170.6L141.9 193.4L124.8 210.9V242.5H103.7Z' fill='white'/>"
-                "<path d='M209.1 242.5V138H229.6L272.4 207.8V138H292V242.5H270.8L228.7 174.3V242.5H209.1Z' fill='white'/>"
-                "<path d='M303.8 242.5L339.5 187.9L307.1 138H331.8L352.8 171.5L373.3 138H397.7L365.2 188.7L400.9 242.5H375.5L352.3 206.3L329.1 242.5H303.8Z' fill='white'/>"
-                "<line x1='0' y1='116' x2='97.8' y2='116' stroke='#449841' stroke-width='10'/>"
-                "<line x1='120.8' y1='116' x2='403' y2='116' stroke='#449841' stroke-width='10'/>"
-                "<line x1='352.8' y1='99' x2='352.8' y2='111' stroke='#449841' stroke-width='10'/>"
-                "<rect x='318.8' y='28' width='67' height='67' fill='#449841'/>"
-                "<line x1='45.8' y1='133' x2='45.8' y2='121' stroke='#449841' stroke-width='10'/>"
-                "<rect x='79.8' y='205' width='67' height='67' transform='rotate(-180 79.8 205)' fill='#449841'/>"
-                "</svg>";
-            addRoute(WEB_GET, "/assets/base.css", Static("text/css", baseCss));
-            addRoute(WEB_GET, "/assets/base.js", Static("text/javascript", baseJs));
-            addRoute(WEB_GET, "/assets/logo/black.svg", Static("image/svg+xml", logoSvg));
-            addRoute(WEB_GET, "/assets/favicon.svg", Static("image/svg+xml", faviconSvg));
+            addRoute(WEB_GET, "/assets/base.css", Asset(WebAssets::base_css_mime, WebAssets::base_css_gz, sizeof(WebAssets::base_css_gz)));
+            addRoute(WEB_GET, "/assets/base.js", Asset(WebAssets::base_js_mime, WebAssets::base_js_gz, sizeof(WebAssets::base_js_gz)));
+            addRoute(WEB_GET, "/assets/logo.svg", Asset(WebAssets::logo_svg_mime, WebAssets::logo_svg_gz, sizeof(WebAssets::logo_svg_gz)));
+            addRoute(WEB_GET, "/assets/favicon.svg", Asset(WebAssets::favicon_svg_mime, WebAssets::favicon_svg_gz, sizeof(WebAssets::favicon_svg_gz)));
 
             addStylesheet("/assets/base.css");
             addJavaScript("/assets/base.js");
@@ -500,9 +431,7 @@ namespace OpenKNX
         WebRouteHandler Webserver::Redirect(const std::string& target)
         {
             return [target](WebRequest& req, WebResponse& res) {
-                res.setStatus(301);
-                res.setHeader("Location", target.c_str());
-                res.send("");
+                res.sendRedirect(target);
             };
         }
 
@@ -523,6 +452,16 @@ namespace OpenKNX
                 res.setContentType(mime.c_str());
                 res.setHeader("Cache-Control", "public, max-age=86400");
                 res.sendStatic(data, length);
+            };
+        }
+
+        // Ein generiertes Web-Asset (webassets.h): mimeType/data kommen aus den
+        // generierten WebAssets::x_mime/x_gz-Symbolen, length via sizeof(x_gz) am
+        // Aufrufer — siehe sendAsset().
+        WebRouteHandler Webserver::Asset(const char* mimeType, const uint8_t* data, size_t length)
+        {
+            return [mimeType, data, length](WebRequest& req, WebResponse& res) {
+                res.sendAsset(mimeType, data, length);
             };
         }
 

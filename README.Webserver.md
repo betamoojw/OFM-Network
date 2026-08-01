@@ -133,6 +133,26 @@ Registered assets are automatically included in the HTML layout:
 - **Scripts** are inserted before the `</body>` tag (with `defer` for non-blocking execution)
 - Both automatically receive a **cache-buster** query parameter in the format `YYYYMMDDHHII` (e.g. `?202605231435`), generated from build time — prevents caching issues after updates
 
+### Built-in Assets (`web/assets/`, generated at build time)
+
+This module's own CSS/JS/SVG (`base.css`, `groupmonitor.js`, the logo, ...) are **not** hand-minified C++ string literals — they're plain, readable source files under `web/assets/` at the repo root. `OGM-Common/scripts/pio/prepare.py` runs on every build, collects `web/assets/` from every included module (and the project itself), minifies and gzip-compresses each file, and writes `include/webassets.h` with, per file:
+
+```cpp
+namespace WebAssets {
+    inline const uint8_t base_css_gz[] = { /* gzip bytes */ };
+    inline const char* const base_css_mime = "text/css";
+}
+```
+
+Serve one with `Webserver::Asset()`, which delegates to `WebResponse::sendAsset()`:
+
+```cpp
+addRoute(WEB_GET, "/assets/custom.css",
+    Asset(WebAssets::custom_css_mime, WebAssets::custom_css_gz, sizeof(WebAssets::custom_css_gz)));
+```
+
+No `_gz_len` symbol — the array size is known at compile time via `sizeof()`. There is no content negotiation: the response always carries `Content-Encoding: gzip`, on the assumption that every real browser accepts it (true for years now). Fetching such a URL with a plain `curl` (no `--compressed`) returns binary, not the source text.
+
 ```cpp
 void MyModule::buildMyPage(WebResponse& res) {
     std::string html = "<div class='container'>";
@@ -212,6 +232,13 @@ class WebResponse {
     // Use for: static const char[], PROGMEM arrays, embedded assets
     void sendStatic(const char* text);
     void sendStatic(const uint8_t* data, int length);
+
+    // Gzip-compressed generated web asset (webassets.h) — sets Content-Type,
+    // Cache-Control and Content-Encoding: gzip, body is a static reference
+    void sendAsset(const char* mimeType, const uint8_t* data, size_t length);
+
+    // 301 redirect, empty body
+    void sendRedirect(const std::string& target);
 };
 ```
 
@@ -222,9 +249,10 @@ body is handed to lwIP **zero-copy** (`tcp_write` without `TCP_WRITE_FLAG_COPY`)
 flash data until ACK instead of copying it into the pbuf pool — which is why the pointer must stay valid for the
 whole application lifetime.
 
-**Note on `setLayout(true)`:** when layout is active, header, body and footer are concatenated into a single
-heap buffer before sending. For large static pages this means one allocation of the full page size; the
-zero-copy optimisation only applies when layout is disabled.
+**Note on `setLayout(true)`:** header, body and footer are **not** concatenated into one buffer. `Webserver::handleRequest()`
+builds a segment list (`ResponseSegment[]`, max 3: header/body/footer) on the `WebResponse`; the platform sends each
+segment directly — one `httpd_resp_send_chunk()` (or `tcp_write()`) per segment, no merge allocation on either platform,
+regardless of whether layout is active.
 
 ---
 
@@ -235,12 +263,12 @@ zero-copy optimisation only applies when layout is disabled.
 | `/` | `OPENKNX_WEBSERVER` | Overview: device, firmware, network, uptime, versions |
 | `/console` | `OPENKNX_WEBCONSOLE` | WebSocket terminal — mirrors the serial logger |
 | `/groupmonitor` | `OPENKNX_WEBMONITOR` | Live KNX group/telegram monitor (TP only) |
-| `/assets/logo/black.svg` | `OPENKNX_WEBSERVER` | OpenKNX logo (inline SVG) |
+| `/assets/logo.svg` | `OPENKNX_WEBSERVER` | OpenKNX logo (generated, gzip) |
 
 ### Console Page (`OPENKNX_WEBCONSOLE`)
 
 - Streams the serial logger live via WebSocket
-- ANSI colors are converted to CSS classes
+- **The device sends raw log lines, ANSI escapes included — it never generates markup.** The browser's own JS parses the escapes and renders each segment via `textContent` (never `innerHTML`), mapping codes to CSS classes:
 
 | ANSI code | CSS class |
 |-----------|-----------|
