@@ -83,6 +83,9 @@ namespace OpenKNX
             // sendToClient() must stay within it, otherwise they retry forever.
             size_t maxWebsocketPayload() const;
             std::vector<int> connectedClientFds(const std::string& uri) const;
+            // Cheaper than connectedClientFds(uri).empty() — no vector copy/allocation,
+            // just for the "is anyone listening at all" check in a hot path.
+            bool hasClients(const std::string& uri) const;
 
             // Public so other modules can embed pages in the same shell
             std::string buildHeader(const std::string& activeUri = "");

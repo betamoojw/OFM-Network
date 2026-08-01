@@ -90,7 +90,10 @@ namespace OpenKNX
         // Sends a WS text frame directly over the raw socket (callable from any task).
         // Uses MSG_DONTWAIT so calls from loopTask (logger callbacks) never block —
         // EAGAIN means the TCP send buffer is full (slow/stalled client); drop the frame
-        // rather than stalling the watchdog-monitored loop.
+        // rather than stalling the watchdog-monitored loop. A short (partial) write is a
+        // different failure: unlike EAGAIN, some bytes DID go out, desyncing the frame
+        // stream for this client from here on — callers must markSessionDead() on false,
+        // not just drop the message.
         static bool wsSendText(int fd, const char* data, size_t len)
         {
             uint8_t hdr[10];
@@ -133,12 +136,33 @@ namespace OpenKNX
             std::string uri;
             httpd_req_t* async;       // async handle — keeps the socket out of httpd's poll set
             std::vector<uint8_t> rx;  // RX accumulation buffer (partial frames span loop ticks)
+            // Set by any task when a send left the frame stream corrupted (partial write —
+            // see wsSendText()). loop() is the only place that tears down a session, so a
+            // sender elsewhere can only flag it; the actual teardown happens on the next tick.
+            bool markedDead = false;
         };
 
         // Active WebSocket sessions, serviced from Webserver::loop(). Guarded by
         // wsStateLock(): the httpd task appends on upgrade, the loop task iterates and
         // removes on disconnect.
         static std::vector<WsSession*> g_wsSessions;
+
+        // A partial wsSendText() write leaves the frame stream desynced for the client —
+        // recv() on this fd keeps succeeding fine (it's a one-way corruption), so loop()'s
+        // usual dead-detection never fires on its own. Flag the session instead; loop()
+        // tears it down on its next tick alongside the other dead conditions.
+        static void markSessionDead(Webserver* ws, int fd)
+        {
+            WsStateGuard guard(ws);
+            for (WsSession* sess : g_wsSessions)
+            {
+                if (sess->fd == fd)
+                {
+                    sess->markedDead = true;
+                    break;
+                }
+            }
+        }
 
         // Parses as many complete WS frames as are buffered in sess->rx and dispatches
         // each. Consumes processed bytes and leaves any partial trailing frame for the
@@ -384,8 +408,22 @@ namespace OpenKNX
             request.setRemotePort(remotePort);
 
             // Body lesen (POST/PUT) – bis OPENKNX_WEBSERVER_MAX_BODY
+            if (req->content_len > OPENKNX_WEBSERVER_MAX_BODY)
+            {
+                // Ohne diesen Zweig würde der Body ungelesen im Socket verbleiben und der
+                // Request mit leerem Body an handleRequest() weitergereicht — der Aufrufer
+                // bekäme dann z.B. ein irreführendes 400 statt der tatsächlichen Ursache.
+                WebResponse response413;
+                response413.setStatus(413);
+                ws->logRequest(request, response413);
+                httpd_resp_set_status(req, "413 Content Too Large");
+                httpd_resp_set_type(req, "text/plain");
+                httpd_resp_sendstr(req, "Content Too Large");
+                return ESP_OK;
+            }
+
             std::vector<uint8_t, PsramAllocator<uint8_t>> bodyData;
-            if (req->content_len > 0 && req->content_len <= OPENKNX_WEBSERVER_MAX_BODY)
+            if (req->content_len > 0)
             {
                 bodyData.resize(req->content_len);
                 int remaining = (int)req->content_len, received = 0;
@@ -395,6 +433,16 @@ namespace OpenKNX
                     if (r <= 0) break;
                     received += r;
                     remaining -= r;
+                }
+                if (received != (int)req->content_len)
+                {
+                    // Verbindung riss während des Body-Empfangs ab — ein Handler, der nur
+                    // gegen bodyLength() prüft, würde den verkürzten Body sonst stillschweigend
+                    // als vollständig behandeln (z.B. FileManager::handleUpload).
+                    httpd_resp_set_status(req, "400 Bad Request");
+                    httpd_resp_set_type(req, "text/plain");
+                    httpd_resp_sendstr(req, "Incomplete body");
+                    return ESP_OK;
                 }
                 request.setBody(bodyData.data(), (size_t)received);
             }
@@ -440,33 +488,23 @@ namespace OpenKNX
                 httpd_resp_send_chunk(req, nullptr, 0);
                 response.cleanupStream();
             }
-            else if (response.useLayout())
+            else if (response.segmentCount() <= 1)
             {
-                std::string header = ws->buildHeader(
-                    response.activeMenuUri().empty() ? uri : response.activeMenuUri());
-                std::string footer = ws->buildFooter();
-
-                int totalLen = (int)header.length() + response.bodyLength() + (int)footer.length();
-                uint8_t* buffer = (uint8_t*)PSRAM_MALLOC(totalLen);
-                if (buffer == nullptr)
-                {
-                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
-                    return ESP_FAIL;
-                }
-
-                int pos = 0;
-                memcpy(buffer + pos, header.c_str(), header.length());
-                pos += header.length();
-                memcpy(buffer + pos, response.body(), response.bodyLength());
-                pos += response.bodyLength();
-                memcpy(buffer + pos, footer.c_str(), footer.length());
-
-                httpd_resp_send(req, (char*)buffer, totalLen);
-                free(buffer);
+                // Ein Block (oder leer) → in einem Rutsch, httpd setzt Content-Length
+                const bool has = response.segmentCount() > 0;
+                httpd_resp_send(req,
+                                has ? (const char*)response.segments()[0].data : "",
+                                has ? response.segments()[0].len : 0);
             }
             else
             {
-                httpd_resp_send(req, response.body(), response.bodyLength());
+                // Mehrere Blöcke einzeln als Chunks — kein gemeinsamer Puffer, keine
+                // Kopie der Seite. Kostet Transfer-Encoding: chunked statt Content-Length.
+                for (int i = 0; i < response.segmentCount(); i++)
+                    httpd_resp_send_chunk(req,
+                                          (const char*)response.segments()[i].data,
+                                          response.segments()[i].len);
+                httpd_resp_send_chunk(req, nullptr, 0);
             }
             return ESP_OK;
         }
@@ -562,6 +600,7 @@ namespace OpenKNX
                 }
 
                 if (!dead && wsParseFrames(sess)) dead = true;
+                if (sess->markedDead) dead = true;
 
                 if (dead)
                 {
@@ -593,7 +632,11 @@ namespace OpenKNX
         {
             if (!_server) return false;
             bool ok = wsSendText(fd, data, len);
-            if (!ok) notifySocketConnect(uri, fd, false);
+            if (!ok)
+            {
+                notifySocketConnect(uri, fd, false);
+                markSessionDead(this, fd);
+            }
             return ok;
         }
 
@@ -666,7 +709,10 @@ namespace OpenKNX
             if (fd >= 0)
             {
                 if (!wsSendText(fd, message, strlen(message)))
+                {
                     notifySocketConnect(uri, fd, false);
+                    markSessionDead(this, fd);
+                }
                 return;
             }
             std::vector<int> clients;
@@ -681,7 +727,10 @@ namespace OpenKNX
             for (int cfd : clients)
             {
                 if (!wsSendText(cfd, message, len))
+                {
                     notifySocketConnect(uri, cfd, false);
+                    markSessionDead(this, cfd);
+                }
             }
         }
 

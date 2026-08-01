@@ -20,7 +20,9 @@ namespace OpenKNX
 
         void WebResponse::setContentType(const char* mimeType)
         {
-            _contentType = mimeType;
+            if (!mimeType) return;
+            strncpy(_contentType, mimeType, sizeof(_contentType) - 1);
+            _contentType[sizeof(_contentType) - 1] = '\0';
         }
 
         void WebResponse::setHeader(const char* name, const char* value)
@@ -118,6 +120,65 @@ namespace OpenKNX
             _streamCtx = nullptr;
             _streamReadFn = nullptr;
             _streamCleanupFn = nullptr;
+        }
+
+        // ── Segmente ─────────────────────────────────────────────────────────
+
+        void WebResponse::setLayoutChrome(std::string header, std::string footer)
+        {
+            _layoutHeader = std::move(header);
+            _layoutFooter = std::move(footer);
+        }
+
+        void WebResponse::finalizeSegments()
+        {
+            _segCount = 0;
+            auto add = [this](const void* data, int len) {
+                if (!data || len <= 0 || _segCount >= MAX_SEGMENTS) return;
+                _segments[_segCount++] = {(const uint8_t*)data, len};
+            };
+
+            // Ab hier darf der Body nicht mehr geändert werden — die Segmente zeigen
+            // direkt hinein, ein weiteres send() würde sie ins Leere laufen lassen.
+            add(_layoutHeader.data(), (int)_layoutHeader.length());
+            add(_body, _bodyLength);
+            add(_layoutFooter.data(), (int)_layoutFooter.length());
+        }
+
+        int WebResponse::totalLength() const
+        {
+            int total = 0;
+            for (int i = 0; i < _segCount; i++)
+                total += _segments[i].len;
+            return total;
+        }
+
+        void WebResponse::reset()
+        {
+            if (_bodyOwned) free(_body); // PSRAM_MALLOC
+            _body = nullptr;
+            _bodyLength = 0;
+            _bodyOwned = true;
+
+            _statusCode = 200;
+            strncpy(_contentType, "text/html", sizeof(_contentType) - 1);
+            _contentType[sizeof(_contentType) - 1] = '\0';
+            _useLayout = false;
+            _activeMenuUri.clear();
+
+            _headers.clear();
+            _headers.push_back({"Cache-Control", "no-store"});
+
+            _streaming = false;
+            _streamTotal = 0;
+            _streamReadFn = nullptr;
+            _streamCleanupFn = nullptr;
+            _streamCtx = nullptr;
+
+            // Zuweisung statt clear(): gibt den Heap-Puffer wirklich frei
+            _layoutHeader = std::string();
+            _layoutFooter = std::string();
+            _segCount = 0;
         }
 
     } // namespace Network

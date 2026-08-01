@@ -422,6 +422,20 @@ namespace OpenKNX
 #endif
         }
 
+        bool Webserver::hasClients(const std::string& uri) const
+        {
+#ifdef ARDUINO_ARCH_ESP32
+            wsStateLock();
+            auto it = _socketClients.find(uri);
+            bool has = it != _socketClients.end() && !it->second.empty();
+            wsStateUnlock();
+            return has;
+#else
+            auto it = _socketClients.find(uri);
+            return it != _socketClients.end() && !it->second.empty();
+#endif
+        }
+
         bool Webserver::handleRequest(WebRequest& req, WebResponse& res)
         {
             // Extract path without query string for routing
@@ -430,6 +444,7 @@ namespace OpenKNX
             if (qpos != std::string::npos)
                 path = path.substr(0, qpos);
 
+            bool handled = false;
             for (auto& route : _routes)
             {
                 if (route.method != req.method) continue;
@@ -451,16 +466,33 @@ namespace OpenKNX
                 if (matched)
                 {
                     route.handler(req, res);
-                    return true;
+                    handled = true;
+                    break;
                 }
             }
 
-            res.setStatus(404);
-            res.setContentType("text/html");
-            res.setLayout(true);
-            res.send("<h2>404 &ndash; Seite nicht gefunden</h2>"
-                     "<p class='meta'>Die angeforderte Seite existiert nicht.</p>");
-            return false;
+            if (!handled)
+            {
+                res.setStatus(404);
+                res.setContentType("text/html");
+                res.setLayout(true);
+                res.send("<h2>404 &ndash; Seite nicht gefunden</h2>"
+                         "<p class='meta'>Die angeforderte Seite existiert nicht.</p>");
+            }
+
+            // Layout anwenden und die Antwort in ihre Sendeblöcke zerlegen. Bewusst hier
+            // und nicht im Plattformcode: der kennt danach nur noch res.segments() und
+            // muss weder useLayout() auswerten noch buildHeader()/buildFooter() kennen.
+            if (!res.isStreaming())
+            {
+                if (res.useLayout())
+                    res.setLayoutChrome(
+                        buildHeader(res.activeMenuUri().empty() ? path : res.activeMenuUri()),
+                        buildFooter());
+                res.finalizeSegments();
+            }
+
+            return handled;
         }
 
         // ── Route-Helpers ──────────────────────────────────────────────────

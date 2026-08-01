@@ -294,7 +294,7 @@ namespace OpenKNX
         void GroupMonitor::onFrame(TPUart::Frame& frame)
         {
             if (!frame.isFrame()) return;
-            if (openknxNetwork.webserver.connectedClientFds("/groupmonitor").empty()) return;
+            if (!openknxNetwork.webserver.hasClients("/groupmonitor")) return;
 
             const char* d = frame.data();
             const uint16_t total = frame.size();

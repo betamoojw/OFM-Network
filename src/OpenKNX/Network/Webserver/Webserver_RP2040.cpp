@@ -77,13 +77,13 @@ namespace OpenKNX
             uint8_t method;
             char uri[128];
             bool isWs;
+            bool uriTooLong; // uri[] didn't fit the actual request line — reject with 414
             char wsKey[64];
 
-            // HTTP TX (chunked streaming)
-            uint8_t* txData;
-            int txLen;
-            int txSent;
-            bool txFree; // delete[] txData when done
+            // HTTP TX — nur die Position; die zu sendenden Blöcke liegen in
+            // g_response[idx].segments(), gehören also der WebResponse.
+            uint8_t txSegIdx; // aktuell sendendes Segment
+            int txSent;       // bereits gesendete Bytes innerhalb dieses Segments
 
             // WS RX state machine
             WsRxState wsRx;
@@ -117,6 +117,12 @@ namespace OpenKNX
         static constexpr int MAX_CONN = OPENKNX_WEBSERVER_MAX_CONN; // shared HTTP + WS slot pool
         static ConnSlot g_slots[MAX_CONN];
 
+        // Die laufende Antwort pro Slot. Muss den asynchronen Versand über mehrere
+        // onSent()-Ticks überleben, deshalb hier statt als lokale Variable in
+        // doHttpDispatch(). Bewusst NICHT in ConnSlot: onAccept nullt den Slot per memset,
+        // was die std::string-/std::vector-Member der Response zerstören würde.
+        static WebResponse g_response[MAX_CONN];
+
         static constexpr size_t WS_FRAME_BUF = 1500;
         static constexpr size_t WS_MAX_PAYLOAD = WS_FRAME_BUF - 4; // 4 B header, 126..65535 form
 
@@ -139,12 +145,10 @@ namespace OpenKNX
         static void releaseSlot(ConnSlot* s)
         {
             if (!s) return;
-            if (s->txFree)
-            {
-                free(s->txData); // PSRAM_MALLOC in doHttpDispatch
-                s->txFree = false;
-            }
-            s->txData = nullptr;
+            s->txSegIdx = 0;
+            s->txSent = 0;
+            // Gibt Body und Layout-Hüllen der Antwort frei
+            if (s->idx >= 0 && s->idx < MAX_CONN) g_response[s->idx].reset();
             if (s->bodyBuf)
             {
                 free(s->bodyBuf); // PSRAM_MALLOC in onRecv
@@ -163,16 +167,36 @@ namespace OpenKNX
 
         // ── TCP send helpers ──────────────────────────────────────────────────
 
+        static bool txDone(const ConnSlot* s)
+        {
+            return s->txSegIdx >= g_response[s->idx].segmentCount();
+        }
+
         static void tcpSendChunk(ConnSlot* s)
         {
-            if (!s->txData || s->txSent >= s->txLen) return;
-            int remaining = s->txLen - s->txSent;
-            int canWrite = (int)tcp_sndbuf(s->pcb);
-            int toWrite = remaining < canWrite ? remaining : canWrite;
-            if (toWrite <= 0) return;
+            const WebResponse& res = g_response[s->idx];
+            while (s->txSegIdx < res.segmentCount())
+            {
+                const ResponseSegment& seg = res.segments()[s->txSegIdx];
+                if (s->txSent >= seg.len)
+                {
+                    // Segment fertig → nahtlos am nächsten weiter, solange Platz ist
+                    s->txSegIdx++;
+                    s->txSent = 0;
+                    continue;
+                }
 
-            if (tcp_write(s->pcb, s->txData + s->txSent, (u16_t)toWrite, TCP_WRITE_FLAG_COPY) == ERR_OK)
-                s->txSent += toWrite; // only advance on success — ERR_MEM retries from onSent
+                int canWrite = (int)tcp_sndbuf(s->pcb);
+                if (canWrite <= 0) break;
+                int remaining = seg.len - s->txSent;
+                int toWrite = remaining < canWrite ? remaining : canWrite;
+
+                if (tcp_write(s->pcb, seg.data + s->txSent, (u16_t)toWrite, TCP_WRITE_FLAG_COPY) != ERR_OK)
+                    break; // ERR_MEM — nicht weiterzählen, Retry kommt aus onSent
+                s->txSent += toWrite;
+            }
+            // Immer flushen: auch eine Antwort ganz ohne Segmente (z.B. 303-Redirect) muss
+            // ihren bereits geschriebenen HTTP-Header sofort loswerden.
             tcp_output(s->pcb);
         }
 
@@ -248,7 +272,9 @@ namespace OpenKNX
 
         // ── HTTP parsing ──────────────────────────────────────────────────────
 
-        static void parseFirstLine(const char* line, uint8_t& method, char* uri, size_t uriSize)
+        // Returns false if the URI didn't fit uriSize — uri is still filled (truncated),
+        // but the caller must reject the request instead of routing the truncated path.
+        static bool parseFirstLine(const char* line, uint8_t& method, char* uri, size_t uriSize)
         {
             method = WEB_GET;
             if (strncmp(line, "POST ", 5) == 0)
@@ -273,9 +299,11 @@ namespace OpenKNX
 
             const char* sp = strchr(line, ' ');
             size_t uLen = sp ? (size_t)(sp - line) : strlen(line);
-            if (uLen >= uriSize) uLen = uriSize - 1;
+            bool fits = uLen < uriSize;
+            if (!fits) uLen = uriSize - 1;
             memcpy(uri, line, uLen);
             uri[uLen] = '\0';
+            return fits;
         }
 
         // Returns true if headers are complete; sets slot fields from parsed headers.
@@ -288,7 +316,7 @@ namespace OpenKNX
             char* lineEnd = strstr(p, "\r\n");
             if (!lineEnd) return false;
             *lineEnd = '\0';
-            parseFirstLine(p, s->method, s->uri, sizeof(s->uri));
+            s->uriTooLong = !parseFirstLine(p, s->method, s->uri, sizeof(s->uri));
             p = lineEnd + 2;
 
             s->isWs = false;
@@ -434,7 +462,10 @@ namespace OpenKNX
                     request.setBody((const uint8_t*)s->rxBuf + s->headerEnd, s->contentLength);
             }
 
-            WebResponse response;
+            // Antwort im Slot-Speicher aufbauen: der Versand läuft asynchron über
+            // onSent() weiter, eine lokale Instanz wäre dann längst zerstört.
+            WebResponse& response = g_response[s->idx];
+            response.reset();
             s->ws->handleRequest(request, response);
 
             s->ws->logRequest(request, response);
@@ -491,27 +522,21 @@ namespace OpenKNX
                 s->streamTotal = response.streamTotal();
                 s->streamSent = 0;
                 s->streaming = true;
-                s->txData = nullptr;
-                s->txLen = 0;
+                s->txSegIdx = 0;
                 s->txSent = 0;
-                s->txFree = false;
                 s->state = CS_HTTP_SEND;
 
                 tcpSendStreamChunk(s);
                 return;
             }
 
-            // Calculate content length, including layout if needed
-            std::string layoutHeader;
-            std::string layoutFooter;
-            int contentLen = response.bodyLength();
-            if (response.useLayout())
-            {
-                layoutHeader = s->ws->buildHeader(
-                    response.activeMenuUri().empty() ? s->uri : response.activeMenuUri());
-                layoutFooter = s->ws->buildFooter();
-                contentLen = (int)layoutHeader.length() + response.bodyLength() + (int)layoutFooter.length();
-            }
+            // Die Segmente stehen bereits in der Response (handleRequest hat sie gebaut) —
+            // hier wird nur noch die Sendeposition zurückgesetzt und rausgeschrieben.
+            s->state = CS_HTTP_SEND;
+            s->txSegIdx = 0;
+            s->txSent = 0;
+
+            const int contentLen = response.totalLength();
 
             char hdr[512];
             char statusStr[32];
@@ -535,51 +560,6 @@ namespace OpenKNX
             hdr[hLen++] = '\r';
             hdr[hLen++] = '\n';
             hdr[hLen] = '\0';
-
-            int bodyLen = contentLen;
-            uint8_t* body = nullptr;
-            bool bodyFree = false;
-            if (bodyLen > 0)
-            {
-                if (response.useLayout())
-                {
-                    body = (uint8_t*)PSRAM_MALLOC(bodyLen);
-                    if (body)
-                    {
-                        int pos = 0;
-                        memcpy(body + pos, layoutHeader.c_str(), layoutHeader.length());
-                        pos += layoutHeader.length();
-                        memcpy(body + pos, response.body(), response.bodyLength());
-                        pos += response.bodyLength();
-                        memcpy(body + pos, layoutFooter.c_str(), layoutFooter.length());
-                        bodyFree = true;
-                    }
-                    else
-                        bodyLen = 0; // Allocation fehlgeschlagen → leerer Body
-                }
-                else if (response.isStatic())
-                {
-                    body = const_cast<uint8_t*>(
-                        reinterpret_cast<const uint8_t*>(response.body()));
-                }
-                else
-                {
-                    body = (uint8_t*)PSRAM_MALLOC(bodyLen);
-                    if (body)
-                    {
-                        memcpy(body, response.body(), bodyLen);
-                        bodyFree = true;
-                    }
-                    else
-                        bodyLen = 0; // Allocation fehlgeschlagen → leerer Body
-                }
-            }
-
-            s->state = CS_HTTP_SEND;
-            s->txData = body;
-            s->txLen = bodyLen;
-            s->txSent = 0;
-            s->txFree = bodyFree;
 
             // Send header immediately (always fits — max ~256 bytes)
             tcp_write(s->pcb, hdr, (u16_t)hLen, TCP_WRITE_FLAG_COPY);
@@ -813,7 +793,7 @@ namespace OpenKNX
                         tcp_close(pcb);
                     }
                 }
-                else if (s->txSent < s->txLen)
+                else if (!txDone(s))
                 {
                     tcpSendChunk(s);
                 }
@@ -881,7 +861,23 @@ namespace OpenKNX
 
                     if (parseHeaders(s))
                     {
-                        if (s->contentLength == 0)
+                        if (s->uriTooLong)
+                        {
+                            // uri[] konnte die Request-Zeile nicht fassen — die abgeschnittene
+                            // URI würde sonst lautlos geroutet (falsche Ressource statt Fehler).
+                            const char resp414[] =
+                                "HTTP/1.1 414 URI Too Long\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            tcp_pcb* pcb = s->pcb;
+                            tcp_write(pcb, resp414, sizeof(resp414) - 1, TCP_WRITE_FLAG_COPY);
+                            tcp_output(pcb);
+                            tcp_arg(pcb, nullptr);
+                            tcp_recv(pcb, nullptr);
+                            tcp_sent(pcb, nullptr);
+                            tcp_poll(pcb, nullptr, 0);
+                            releaseSlot(s);
+                            tcp_close(pcb);
+                        }
+                        else if (s->contentLength == 0)
                         {
                             s->hasPendingRequest = true;
                         }

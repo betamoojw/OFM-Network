@@ -205,6 +205,21 @@ openknxNetwork.webserver.addJavaScript("/assets/custom.js");
 - `Webserver._stylesheets` → `std::vector<std::string>` iterated in `buildHeader`
 - `Webserver._scripts` → `std::vector<std::string>` iterated in `buildFooter`
 
+### Response Assembly (Segments)
+
+The platform transport code knows nothing about layout. `Webserver::handleRequest()` routes the request and then, unless the response is streaming, applies the layout and flattens everything into a segment list on the `WebResponse`:
+
+- `setLayoutChrome()` moves the `buildHeader()`/`buildFooter()` strings into the response (no copy)
+- `finalizeSegments()` builds `ResponseSegment[]` = header + body + footer (max 3, empty parts skipped)
+- Segments are plain `{data, len}` views — **the memory always belongs to the `WebResponse`**, so no ownership flag and nothing to free per segment
+
+Platform code then only iterates `response.segments()`:
+
+- **ESP32**: one segment → `httpd_resp_send()` (keeps `Content-Length`); several → `httpd_resp_send_chunk()` each
+- **RP2040**: `ConnSlot` holds only the send position (`txSegIdx`/`txSent`); `tcpSendChunk()` walks the segments across `onSent()` ticks
+
+Nothing is copied to assemble a page — no merged header+body+footer buffer on either platform. Because RP2040 sends asynchronously, the response must outlive `doHttpDispatch()`: it lives in `static WebResponse g_response[MAX_CONN]`, indexed by slot. Deliberately **not** inside `ConnSlot` — `onAccept()` clears that with `memset`, which would wreck the `std::string`/`std::vector` members. `releaseSlot()` calls `reset()` on it.
+
 ### Layout Convention: `.container`
 
 `buildHeader()` emits only `<nav>` + `<main>` — no wrapping `<div class='container'>`.
@@ -215,21 +230,12 @@ Each page decides independently whether to use the container div.
 
 ### Logger Ring Buffer (`OPENKNX_WEBCONSOLE`)
 
-The ring buffer lives in `OpenKNX::Log::Logger` (OGM-Common), **not** in the webserver. It fills regardless of whether WebSocket clients are connected — new clients automatically receive the history.
+The ring buffer lives in `OpenKNX::Log::Logger` (OGM-Common), **not** in the webserver. It fills regardless of whether WebSocket clients are connected.
 
-- **Type**: byte-addressed ring buffer with variable entry length (no fixed slots)
-- **Size**: `OPENKNX_WEBCONSOLE_BUFFER` bytes total (default: 4096)
-- **Entry format**: `[uint32_t seq][uint16_t len][char text[len]]` = `LOG_ENTRY_HDR`(6) + len bytes
-- **Sentinel**: when a new entry no longer fits at the end, the remaining bytes are zeroed (seq=0 = sentinel) and `_logTail` resets to 0
-- **Overflow**: when a new entry would overwrite the head, old entries are evicted from `_logHead`
-- **Sequence numbers**: monotonically increasing (`_logNextSeq`), starting at 1; seq=0 is reserved for sentinels/unwritten areas
-- **Per-line accumulator**: `_lineAccum[LOG_LINE_MAX]` (256 chars) — filled on every log call and committed to the buffer after `\n` via `commitLineToRing()`
-- **API**: `openknx.logger.getLogEntryAfter(lastSeq, buf, size, &outSeq)` — returns the first entry with `seq > lastSeq`; iterates from `_logHead`, skips sentinels automatically
-
-**Logger implementation:**
-- `beforeLog()`: sets `_lineAccumLen = 0`
-- Every print call (`printMessage`, `printPrefix`, `printTimestamp`, etc.) also calls `appendWebconsoleBuffer()`
-- `afterLog()`: appends `\n`, calls `commitLineToRing()`
+- **Type**: plain byte ring, no entries/framing — `char _ringBuf[RING_SIZE]`, written one character at a time via `appendWebconsoleBuffer()` (`_ringBuf[_ringWritePos++ % RING_SIZE] = c`)
+- **Size**: `RING_SIZE = OPENKNX_WEBCONSOLE_BUFSIZE` bytes
+- **API**: `ringBuf()` (raw buffer pointer) and `ringWritePos()` (monotonically increasing write cursor, never wraps itself — callers index with `% RING_SIZE`)
+- No sequence numbers, no sentinels, no line framing on the logger side — `Webconsole::loop()` (below) is the one that walks the buffer and splits it into lines
 
 ### RP2040 Architecture (lwIP `NO_SYS=1`)
 
@@ -243,7 +249,7 @@ static ConnSlot g_slots[MAX_CONN];
 
 `OPENKNX_WEBSERVER_MAX_CONN` (RP2040, default 3) is **not** the same flag as ESP32's `OPENKNX_WEBSOCKET_MAX`: on RP2040 the slot pool is shared between HTTP and WebSocket, so the name reflects that. Raising it also needs more lwIP PCBs (`MEMP_NUM_TCP_PCB`). `OPENKNX_WEBSOCKET_RX_CAP` is shared with ESP32 (per-WS RX limit), but overflow behaviour differs: RP2040 truncates, ESP32 disconnects.
 
-Each `ConnSlot` holds: HTTP RX buffer (1536 B), HTTP TX pointer, WS state machine state, WS payload buffer (`OPENKNX_WEBSOCKET_RX_CAP` B), `wsSentSeq` (when `OPENKNX_WEBCONSOLE`).
+Each `ConnSlot` holds: HTTP RX buffer (1536 B), HTTP TX pointer, WS state machine state, WS payload buffer (`OPENKNX_WEBSOCKET_RX_CAP` B). Per-client webconsole read position is tracked in `Webconsole::_consoleReadPos` (keyed by fd/slot index), not in `ConnSlot` — see below.
 
 **Important:** `onAccept` calls `memset(s, 0, sizeof(*s))`, which clears `s->idx`. Therefore `idx` is set **after** the memset via pointer arithmetic:
 ```cpp
@@ -262,32 +268,23 @@ State is fully held in `ConnSlot` — no global parser state.
 
 **Ping/keepalive:** `onPoll` sends a WS ping (opcode 0x09) every ~60 s. If the browser does not respond, lwIP's retransmit timeout detects the dead socket and fires `onErr`.
 
-### Command Processing on RP2040 (Decoupling from lwIP Callbacks)
+### Command Processing (Decoupling from Network Callbacks)
 
-**Problem:** `processCommand()` calls many log functions that generate serial TX output. Inside an lwIP callback (`onRecv`) this would block the USB-CDC FIFO and truncate the output.
+Platform-neutral, lives in `Webconsole` (`_pendingCmd[256]` / `_hasPendingCmd`), not per-platform.
+
+**Problem:** `processCommand()` calls many log functions that generate serial TX output. Running it inside a network callback (lwIP `onRecv` on RP2040; the httpd task on ESP32) would block and could truncate output or stall the callback's task.
 
 **Solution:** Queue-and-defer pattern:
-- The WS message handler (running in `onRecv`) only writes to `_pendingCmd[256]` and sets `_hasPendingCmd = true`
-- `Webserver::loop()` (clean stack, outside all lwIP callbacks) reads `_pendingCmd`, clears the flag, then calls `processCommand()`
-
-```cpp
-// in loop():
-if (_hasPendingCmd) {
-    _hasPendingCmd = false;
-    logInfo("", "> %s", _pendingCmd);
-    openknx.console.processCommand(_pendingCmd);
-}
-```
+- The WS message handler (`addSocket()` callback in `Webconsole::setup()`) only copies the command into `_pendingCmd` and sets `_hasPendingCmd = true`
+- `Webconsole::loop()` (called from `Network::Module::loop()`, clean stack) picks it up, echoes it via the logger, and calls `openknx.console.processCommand()`
 
 **Limitation:** There is only one `_pendingCmd` slot. With multiple simultaneous WS clients the last received message overwrites the previous one. This is sufficient for a single console session.
 
 **Binary frame filter:** WS frames from the browser containing bytes outside printable ASCII (`0x20–0x7E`, `\r`, `\n`, `\t`) are silently discarded. Protects against garbage from malformed or protocol-internal frames (e.g. browser reconnect artifacts).
 
-### History for New WebSocket Clients
+### No History for New WebSocket Clients
 
-New clients connect with `wsSentSeq = 0` (automatically zeroed by `memset` in `onAccept`). `loop()` calls `getLogEntryAfter(0, ...)` and sends all ring buffer entries sequentially. No special "history dump" code needed — the normal drain loop covers it.
-
-Per-client tracking: `ConnSlot.wsSentSeq` holds the last successfully sent sequence number. `loop()` sends as many entries per tick as fit in the TCP buffer (breaks on `wsTcpSend() == false`, retries next tick).
+A new client's read position starts at the logger's *current* `ringWritePos()` (`Webconsole::_consoleReadPos[fd]`), not at the oldest available data — it sees only lines logged after it connected, no backlog. Per-client position is tracked in `Webconsole::_consoleReadPos` (map keyed by fd/slot index), reset on disconnect via the socket's `onConnect` callback so a reconnecting client with a reused fd/slot doesn't inherit a stale position and get dumped a backlog. `loop()` sends as many complete lines per tick as fit in a WS frame (`Webserver::maxWebsocketPayload()`), breaking on a failed `sendToClient()` and retrying next tick.
 
 ### ESP32 Architecture
 
@@ -298,6 +295,11 @@ Per-client tracking: `ConnSlot.wsSentSeq` holds the last successfully sent seque
 - Concurrency capped at `OPENKNX_WEBSOCKET_MAX` (default 3); excess upgrades get HTTP 503. `config.lru_purge_enable = true` frees idle HTTP keep-alives so new upgrades find a socket slot.
 - Shared state (`_socketClients` + the WS session registry) guarded by a recursive mutex (`Webserver::wsStateLock/Unlock`), reachable from both `Webserver_ESP32.cpp` and the platform-agnostic `Webserver.cpp` (`connectedClientFds`). `wsSendText()`/`wsRawSend()` use `MSG_DONTWAIT` and are serialized by a TX mutex so frames from different tasks never interleave.
 - TCP keepalive: 3 s idle, 2 s interval, 3 probes → dead connections detected after ~9 s
+- **Streaming downloads (`FileManager::handleDownload`) run synchronously in the httpd task** — `platformHttpHandler()` reads the whole file from LittleFS and calls `httpd_resp_send_chunk()` in a blocking loop. Since httpd has a single task, no other HTTP request (including WS upgrades) is served until the download finishes. Acceptable for the small config/log files WEBFS is meant for; would need reworking (spread across `Webserver::loop()` ticks like RP2040 already does) before serving large files.
+
+### WebSocket Protocol Scope
+
+Both platforms parse only what the bundled browser clients actually send: masked, unfragmented text/binary/ping/pong/close frames. Frames without a mask (disallowed by RFC 6455 for client→server) and fragmented messages (opcode `0x00` continuation, `FIN=0`) are **not validated or reassembled** — not a concern as long as the only clients are this module's own pages, whose `ws.send(string)` calls never produce either. Revisit if the WS endpoints are ever exposed to third-party clients.
 
 ### Web UI: Console Page
 

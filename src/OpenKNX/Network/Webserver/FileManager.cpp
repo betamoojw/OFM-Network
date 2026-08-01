@@ -155,6 +155,48 @@ namespace OpenKNX
             return r;
         }
 
+        // Wie jsStr(), aber zusätzlich für die Verwendung als Inhalt eines <script>-Blocks:
+        // '<' wird JS-escaped, damit ein "</script>" im Wert (z.B. aus dir) den umgebenden
+        // <script>-Tag nicht vorzeitig beendet. Der Browser dekodiert HTML-Entities in
+        // Script-Rohtext nicht, htmlEscape() greift hier also nicht — das '<' muss auf
+        // JS-Ebene neutralisiert werden.
+        static std::string jsStrScriptBody(const std::string& s)
+        {
+            std::string r = jsStr(s);
+            std::string out;
+            out.reserve(r.size());
+            for (char c : r)
+            {
+                if (c == '<') out += "\\x3C";
+                else
+                    out += c;
+            }
+            return out;
+        }
+
+        // Escaped für HTML-Textinhalt/Attribute. dir/displayName kommen aus dem
+        // Query-String bzw. aus Dateinamen, die der Upload-Handler ungeprüft annimmt —
+        // ohne dies bricht z.B. ein Verzeichnis- oder Dateiname mit '<' aus dem
+        // umgebenden Markup bzw. aus dem <script>-Block in buildOverviewPage aus.
+        static std::string htmlEscape(const std::string& s)
+        {
+            std::string r;
+            r.reserve(s.size());
+            for (char c : s)
+            {
+                switch (c)
+                {
+                    case '<': r += "&lt;"; break;
+                    case '>': r += "&gt;"; break;
+                    case '&': r += "&amp;"; break;
+                    case '"': r += "&quot;"; break;
+                    case '\'': r += "&#39;"; break;
+                    default: r += c; break;
+                }
+            }
+            return r;
+        }
+
         static std::string absPath(const std::string& dir, const std::string& entryName)
         {
             if (!entryName.empty() && entryName[0] == '/') return entryName;
@@ -225,7 +267,7 @@ namespace OpenKNX
             if (dir != "/")
             {
                 html += " &ndash; ";
-                html += dir;
+                html += htmlEscape(dir);
             }
             html += "</h1>";
 
@@ -262,10 +304,10 @@ namespace OpenKNX
                             html += "<tr><td><a href='/filemanager?dir=";
                             html += urlEncode(path);
                             html += "'>";
-                            html += displayName;
+                            html += htmlEscape(displayName);
                             html += "/</a></td><td class='right'></td><td class='right'>";
                             html += "<a href='#' onclick=\"delDir('";
-                            html += jsStr(path);
+                            html += htmlEscape(jsStr(path));
                             html += "'); return false;\">L&ouml;schen</a>";
                             html += "</td></tr>";
                         }
@@ -292,13 +334,13 @@ namespace OpenKNX
                             size_t sz = entry.size();
 
                             html += "<tr><td>";
-                            html += displayName;
+                            html += htmlEscape(displayName);
                             html += "</td><td class='right'>";
                             html += fmtBytes(sz);
                             html += "</td><td class='right'><a href='/filemanager/download?path=";
                             html += urlEncode(path);
                             html += "'>Download</a> | <a href='#' onclick=\"delFile('";
-                            html += jsStr(path);
+                            html += htmlEscape(jsStr(path));
                             html += "'); return false;\">L&ouml;schen</a>";
                             html += "</td></tr>";
                         }
@@ -352,7 +394,7 @@ namespace OpenKNX
 
             // Nur currentDir ist dynamisch – der Rest steckt in /assets/filemanager.js
             html += "<script>const currentDir='";
-            html += jsStr(dir);
+            html += jsStrScriptBody(dir);
             html += "';</script></div>";
 
             res.setLayout(true);

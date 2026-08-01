@@ -24,7 +24,21 @@ namespace OpenKNX
             if (qpos == std::string::npos) return "";
             std::string query = uri.substr(qpos + 1);
             std::string prefix = name + "=";
-            size_t pos = query.find(prefix);
+
+            // find(prefix) alone would also match "mode=" inside "xmode=1" — the hit must
+            // start the query or follow a '&'.
+            size_t pos = std::string::npos;
+            for (size_t search = 0; search < query.size();)
+            {
+                size_t hit = query.find(prefix, search);
+                if (hit == std::string::npos) break;
+                if (hit == 0 || query[hit - 1] == '&')
+                {
+                    pos = hit;
+                    break;
+                }
+                search = hit + 1;
+            }
             if (pos == std::string::npos) return "";
             pos += prefix.size();
             size_t end = query.find('&', pos);
